@@ -1,0 +1,18 @@
+[project]
+name = "codex-log-analysis"
+version = "0.1.0"
+description = "CLI tools for analyzing Codex session snapshots"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+codex-log-analysis = "codex_log_analysis.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = true
+

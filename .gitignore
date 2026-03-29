@@ -1,0 +1,9 @@
+.DS_Store
+.venv/
+__pycache__/
+*.pyc
+sessions_snapshot/
+archived_sessions_snapshot/
+state_*.sqlite
+*.sqlite-shm
+*.sqlite-wal
