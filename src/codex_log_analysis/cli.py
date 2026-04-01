@@ -95,7 +95,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     serve_parser = subparsers.add_parser(
         "serve",
-        help="start a local web server with tabbed report views",
+        help="start a local web server with session, issue, and conversation detail views",
     )
     serve_parser.add_argument(
         "--date",

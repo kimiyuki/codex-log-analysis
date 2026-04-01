@@ -4,6 +4,10 @@ __pycache__/
 *.pyc
 sessions_snapshot/
 archived_sessions_snapshot/
+sessions_snapshot_bk/
+archived_sessions_snapshot_bk/
 state_*.sqlite
+state_*.sqlite.back
+state_*.sqlite.demo-disabled*
 *.sqlite-shm
 *.sqlite-wal

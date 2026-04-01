@@ -66,6 +66,10 @@ class SessionSummary:
     issue_refs: set[str] = field(default_factory=set)
     skill_mentions: int = 0
     keyword_counts: Counter[str] = field(default_factory=Counter)
+    subagent_parent_session_id: str | None = None
+    subagent_depth: int | None = None
+    subagent_nickname: str | None = None
+    subagent_role: str | None = None
 
     @property
     def prompt_preview(self) -> str:
@@ -85,6 +89,10 @@ class SessionSummary:
         words = [word for word, _ in self.keyword_counts.most_common(5)]
         return ", ".join(words) if words else "-"
 
+    @property
+    def is_subagent_session(self) -> bool:
+        return self.subagent_parent_session_id is not None
+
     def to_dict(self) -> dict[str, object]:
         return {
             "session_id": self.session_id,
@@ -102,6 +110,11 @@ class SessionSummary:
             "skill_signal_count": self.skill_mentions,
             "created_at": self.created_at,
             "timestamp": self.timestamp,
+            "is_subagent_session": self.is_subagent_session,
+            "subagent_parent_session_id": self.subagent_parent_session_id,
+            "subagent_depth": self.subagent_depth,
+            "subagent_nickname": self.subagent_nickname,
+            "subagent_role": self.subagent_role,
         }
 
 
@@ -135,6 +148,26 @@ class IssueGroup:
         }
 
 
+@dataclass
+class ConversationMessage:
+    index: int
+    role: str
+    text: str
+    timestamp: str | None = None
+    display_role: str | None = None
+    is_subagent_context: bool = False
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "index": self.index,
+            "role": self.role,
+            "text": self.text,
+            "timestamp": self.timestamp,
+            "display_role": self.display_role or self.role,
+            "is_subagent_context": self.is_subagent_context,
+        }
+
+
 def normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
 
@@ -163,6 +196,13 @@ def extract_content_text(content: object) -> Iterable[str]:
             if isinstance(text, str) and text.strip():
                 texts.append(text)
     return texts
+
+
+def join_content_text(content: object) -> str | None:
+    texts = [text.strip() for text in extract_content_text(content) if text.strip()]
+    if not texts:
+        return None
+    return "\n\n".join(texts)
 
 
 def extract_words(text: str) -> Iterable[str]:
@@ -227,6 +267,33 @@ def summarize_file(path: Path) -> SessionSummary | None:
                     summary = summary or SessionSummary(session_id=session_id, path=path)
                     summary.timestamp = payload.get("timestamp")
                     summary.cwd = payload.get("cwd")
+                    source = payload.get("source")
+                    if isinstance(source, dict):
+                        subagent = source.get("subagent")
+                        if isinstance(subagent, dict):
+                            thread_spawn = subagent.get("thread_spawn")
+                            if isinstance(thread_spawn, dict):
+                                parent_thread_id = thread_spawn.get("parent_thread_id")
+                                if isinstance(parent_thread_id, str) and parent_thread_id:
+                                    summary.subagent_parent_session_id = parent_thread_id
+                                depth = thread_spawn.get("depth")
+                                if isinstance(depth, int):
+                                    summary.subagent_depth = depth
+                                agent_nickname = thread_spawn.get("agent_nickname")
+                                if isinstance(agent_nickname, str) and agent_nickname:
+                                    summary.subagent_nickname = agent_nickname
+                                agent_role = thread_spawn.get("agent_role")
+                                if isinstance(agent_role, str) and agent_role:
+                                    summary.subagent_role = agent_role
+
+                    if summary.subagent_nickname is None:
+                        agent_nickname = payload.get("agent_nickname")
+                        if isinstance(agent_nickname, str) and agent_nickname:
+                            summary.subagent_nickname = agent_nickname
+                    if summary.subagent_role is None:
+                        agent_role = payload.get("agent_role")
+                        if isinstance(agent_role, str) and agent_role:
+                            summary.subagent_role = agent_role
                     continue
 
                 if summary is None:
@@ -364,6 +431,107 @@ def collect_summaries(
     return summaries
 
 
+def resolve_session_path(
+    root: Path,
+    archived_root: Path,
+    session_id: str,
+    file_hint: str | None = None,
+) -> Path:
+    roots = [base.resolve() for base in (root, archived_root) if base.exists()]
+
+    if file_hint:
+        candidate = Path(file_hint)
+        if not candidate.is_absolute():
+            candidate = Path.cwd() / candidate
+        candidate = candidate.resolve()
+        if not candidate.exists():
+            raise FileNotFoundError(f"session file does not exist: {file_hint}")
+        if session_id not in candidate.name:
+            raise ValueError(f"session file does not match session id: {file_hint}")
+        if not any(candidate.is_relative_to(base) for base in roots):
+            raise ValueError(f"session file is outside snapshot roots: {file_hint}")
+        return candidate
+
+    matches: list[Path] = []
+    for base in (root, archived_root):
+        if not base.exists():
+            continue
+        matches.extend(sorted(base.rglob(f"*{session_id}.jsonl")))
+
+    unique_matches: list[Path] = []
+    seen: set[Path] = set()
+    for match in matches:
+        resolved = match.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique_matches.append(resolved)
+
+    if not unique_matches:
+        raise FileNotFoundError(f"session file not found for id: {session_id}")
+    if len(unique_matches) > 1:
+        joined = ", ".join(str(path) for path in unique_matches)
+        raise RuntimeError(f"multiple session files found for {session_id}: {joined}")
+    return unique_matches[0]
+
+
+def load_conversation_messages(path: Path, summary: SessionSummary | None = None) -> list[ConversationMessage]:
+    messages: list[ConversationMessage] = []
+    is_subagent_session = bool(summary and summary.is_subagent_session)
+    subagent_nickname = summary.subagent_nickname if summary is not None else None
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for line_number, line in enumerate(fh, start=1):
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    print(
+                        f"warn: {path}:{line_number}: invalid json: {exc}",
+                        file=sys.stderr,
+                    )
+                    continue
+
+                if record.get("type") != "response_item":
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("type") != "message":
+                    continue
+
+                role = payload.get("role")
+                if role not in {"user", "assistant"}:
+                    continue
+
+                text = join_content_text(payload.get("content"))
+                if text is None:
+                    continue
+                if role == "user" and is_meta_prompt(text):
+                    continue
+
+                timestamp = record.get("timestamp")
+                display_role = role
+                if is_subagent_session:
+                    if role == "user":
+                        display_role = "parent agent"
+                    else:
+                        display_role = f"sub agent: {subagent_nickname}" if subagent_nickname else "sub agent"
+                messages.append(
+                    ConversationMessage(
+                        index=len(messages) + 1,
+                        role=role,
+                        text=text,
+                        timestamp=timestamp if isinstance(timestamp, str) else None,
+                        display_role=display_role,
+                        is_subagent_context=is_subagent_session,
+                    )
+                )
+    except OSError as exc:
+        raise RuntimeError(f"failed to read session detail: {path}: {exc}") from exc
+
+    return messages
+
+
 def group_by_issue(summaries: list[SessionSummary]) -> list[IssueGroup]:
     groups: dict[str, IssueGroup] = {}
     for summary in summaries:
@@ -411,4 +579,37 @@ def build_report_payload(
         "active_sessions": [item.to_dict() for item in active_sessions],
         "archived_sessions": [item.to_dict() for item in archived_sessions],
         "issue_groups": [item.to_dict() for item in issue_groups],
+    }
+
+
+def build_session_detail_payload(
+    root: Path,
+    archived_root: Path,
+    sqlite_path: Path | None,
+    session_id: str,
+    file_hint: str | None = None,
+) -> dict[str, object]:
+    path = resolve_session_path(
+        root=root,
+        archived_root=archived_root,
+        session_id=session_id,
+        file_hint=file_hint,
+    )
+    summary = summarize_file(path)
+    if summary is None:
+        raise RuntimeError(f"failed to summarize session file: {path}")
+
+    if sqlite_path is not None and sqlite_path.exists():
+        metadata = load_thread_metadata(sqlite_path, [summary.session_id])
+        apply_thread_metadata([summary], metadata)
+
+    conversation = load_conversation_messages(path, summary)
+    return {
+        "session": summary.to_dict(),
+        "conversation": [item.to_dict() for item in conversation],
+        "stats": {
+            "messages": len(conversation),
+            "user_messages": sum(1 for item in conversation if item.role == "user"),
+            "assistant_messages": sum(1 for item in conversation if item.role == "assistant"),
+        },
     }

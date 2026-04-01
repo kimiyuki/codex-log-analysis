@@ -4,9 +4,14 @@ import json
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
-from .analysis import build_report_payload, default_target_date, parse_date
+from .analysis import (
+    build_report_payload,
+    build_session_detail_payload,
+    default_target_date,
+    parse_date,
+)
 
 
 def render_html(initial_date: str, initial_limit: int) -> str:
@@ -64,9 +69,68 @@ def render_html(initial_date: str, initial_limit: int) -> str:
     .controls {{
       display: flex;
       gap: 12px;
-      flex-wrap: wrap;
+      flex-wrap: nowrap;
       align-items: end;
       margin-top: 20px;
+    }}
+    .controls-main {{
+      display: flex;
+      gap: 12px;
+      align-items: end;
+      flex: 0 0 auto;
+    }}
+    .quick-days {{
+      margin-left: auto;
+      min-width: 530px;
+      padding: 12px 14px;
+      border: 3px solid #f59a17;
+      border-radius: 10px;
+      background: rgba(255, 250, 242, 0.72);
+    }}
+    .quick-days-title {{
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }}
+    .quick-days-list {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 8px;
+    }}
+    .quick-day {{
+      min-width: 0;
+      padding: 10px 8px;
+      border-radius: 14px;
+      border: 1px solid rgba(165, 77, 45, 0.18);
+      background: rgba(255, 255, 255, 0.72);
+      color: var(--ink);
+      text-align: center;
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+    }}
+    .quick-day:hover {{
+      transform: translateY(-1px);
+      border-color: var(--accent);
+      background: rgba(255, 245, 238, 0.96);
+    }}
+    .quick-day.active {{
+      background: var(--accent);
+      border-color: var(--accent);
+      color: white;
+      box-shadow: 0 10px 24px rgba(165, 77, 45, 0.18);
+    }}
+    .quick-day-day {{
+      display: block;
+      font-size: 17px;
+      font-weight: 700;
+      line-height: 1.1;
+    }}
+    .quick-day-label {{
+      display: block;
+      margin-top: 4px;
+      font-size: 11px;
+      opacity: 0.82;
     }}
     label {{
       display: grid;
@@ -161,6 +225,17 @@ def render_html(initial_date: str, initial_limit: int) -> str:
       font-size: 18px;
       line-height: 1.35;
     }}
+    .sensitive {{
+      transition: filter 160ms ease, opacity 160ms ease;
+    }}
+    body.demo-mask .sensitive {{
+      filter: blur(10px);
+      opacity: 0.85;
+      user-select: none;
+    }}
+    body.demo-mask .sensitive::selection {{
+      background: transparent;
+    }}
     .meta {{
       display: flex;
       flex-wrap: wrap;
@@ -174,12 +249,38 @@ def render_html(initial_date: str, initial_limit: int) -> str:
       border-radius: 999px;
       font-size: 12px;
     }}
+    .chip.subagent {{
+      background: rgba(165, 77, 45, 0.14);
+      color: var(--accent);
+      border: 1px solid rgba(165, 77, 45, 0.22);
+    }}
     .prompt, .paths {{
       color: var(--muted);
       font-size: 14px;
       line-height: 1.55;
       margin: 8px 0 0;
       word-break: break-word;
+    }}
+    .session-card-link {{
+      display: block;
+      color: inherit;
+      text-decoration: none;
+    }}
+    .session-card-link .card {{
+      cursor: pointer;
+      transition: transform 160ms ease, border-color 160ms ease, box-shadow 160ms ease;
+    }}
+    .session-card-link:hover .card {{
+      transform: translateY(-2px);
+      border-color: var(--accent);
+      box-shadow: 0 16px 34px rgba(79, 54, 31, 0.12);
+    }}
+    .session-card-link:focus-visible {{
+      outline: none;
+    }}
+    .session-card-link:focus-visible .card {{
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(165, 77, 45, 0.18);
     }}
     .issue-list {{
       display: grid;
@@ -209,32 +310,33 @@ def render_html(initial_date: str, initial_limit: int) -> str:
       padding: 20px;
       background: rgba(255, 253, 248, 0.65);
     }}
-    @media (max-width: 720px) {{
-      main {{ padding: 20px 14px 40px; }}
-      .hero {{ padding: 18px; border-radius: 18px; }}
-      .stats {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
-    }}
   </style>
 </head>
 <body>
   <main>
     <section class="hero">
       <h1>Codex Log Analysis</h1>
-      <p class="lede">通常セッションと archived セッションをまとめて読み、Issue 別の束ねも同じ画面で見られるローカルレポートです。</p>
+      <p class="lede">通常セッションと archived セッションをまとめて読み、一覧から会話だけに絞ったセッション詳細へも移動できるローカルレポートです。</p>
       <form class="controls" id="controls">
-        <label>
-          日付
-          <input type="date" id="dateInput" value="{initial_date}">
-        </label>
-        <label class="checkbox">
-          <input type="checkbox" id="allInput">
-          全期間
-        </label>
-        <label>
-          最大件数
-          <input type="number" id="limitInput" min="1" value="{initial_limit}">
-        </label>
-        <button type="submit">再読み込み</button>
+        <div class="controls-main">
+          <label>
+            日付
+            <input type="date" id="dateInput" value="{initial_date}">
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="allInput">
+            全期間
+          </label>
+          <label>
+            最大件数
+            <input type="number" id="limitInput" min="1" value="{initial_limit}">
+          </label>
+          <button type="submit">再読み込み</button>
+        </div>
+        <section class="quick-days" aria-label="直近5日フィルタ">
+          <p class="quick-days-title">直近5日</p>
+          <div class="quick-days-list" id="quickDays"></div>
+        </section>
       </form>
     </section>
 
@@ -265,33 +367,53 @@ def render_html(initial_date: str, initial_limit: int) -> str:
     const dateInput = document.getElementById("dateInput");
     const allInput = document.getElementById("allInput");
     const limitInput = document.getElementById("limitInput");
+    const quickDaysEl = document.getElementById("quickDays");
+    const searchParams = new URLSearchParams(window.location.search);
+    const demoStep = searchParams.get("step");
+    const demoMask = searchParams.get("mask") === "1";
+    const weekDays = ["日", "月", "火", "水", "木", "金", "土"];
+
+    function buildSessionHref(session) {{
+      const params = new URLSearchParams();
+      if (session.file) {{
+        params.set("file", session.file);
+      }}
+      if (demoMask) {{
+        params.set("mask", "1");
+      }}
+      const query = params.toString();
+      const base = `/sessions/${{encodeURIComponent(session.session_id)}}`;
+      return query ? `${{base}}?${{query}}` : base;
+    }}
 
     function cardHtml(session) {{
       const issues = session.issue_refs.length ? session.issue_refs.join(", ") : "-";
       const keywords = session.keywords.length ? session.keywords.join(", ") : "-";
       return `
-        <article class="card">
-          <h3>${{escapeHtml(session.title)}}</h3>
-          <div class="meta">
-            <span class="chip">${{session.archived ? "archived" : "active"}}</span>
-            <span class="chip">branch: ${{escapeHtml(session.branch)}}</span>
-            <span class="chip">prompts: ${{session.user_prompts}}</span>
-            <span class="chip">skill signal: ${{session.skill_signal_count}}</span>
-            <span class="chip">issues: ${{escapeHtml(issues)}}</span>
-          </div>
-          <p class="prompt">${{escapeHtml(session.first_prompt)}}</p>
-          <p class="paths">cwd: ${{escapeHtml(session.cwd)}}<br>keywords: ${{escapeHtml(keywords)}}<br>file: ${{escapeHtml(session.file)}}</p>
-        </article>`;
+        <a class="session-card-link" href="${{buildSessionHref(session)}}" aria-label="${{escapeHtml(session.title)}} の詳細を開く">
+          <article class="card">
+            <h3 class="sensitive">${{escapeHtml(session.title)}}</h3>
+            <div class="meta sensitive">
+              <span class="chip">${{session.archived ? "archived" : "active"}}</span>
+              <span class="chip">branch: ${{escapeHtml(session.branch)}}</span>
+              <span class="chip">prompts: ${{session.user_prompts}}</span>
+              <span class="chip">skill signal: ${{session.skill_signal_count}}</span>
+              <span class="chip">issues: ${{escapeHtml(issues)}}</span>
+            </div>
+            <p class="prompt sensitive">${{escapeHtml(session.first_prompt)}}</p>
+            <p class="paths sensitive">cwd: ${{escapeHtml(session.cwd)}}<br>keywords: ${{escapeHtml(keywords)}}<br>file: ${{escapeHtml(session.file)}}</p>
+          </article>
+        </a>`;
     }}
 
     function issueCardHtml(issue) {{
       const titles = issue.titles.length
-        ? `<ul>${{issue.titles.map((title) => `<li>${{escapeHtml(title)}}</li>`).join("")}}</ul>`
-        : "<div class=\\"empty\\">関連タイトルなし</div>";
+        ? `<ul class=\\"sensitive\\">${{issue.titles.map((title) => `<li>${{escapeHtml(title)}}</li>`).join("")}}</ul>`
+        : "<div class=\\"empty sensitive\\">関連タイトルなし</div>";
       return `
         <article class="issue-card">
-          <h3>${{escapeHtml(issue.issue_ref)}}</h3>
-          <div class="meta">
+          <h3 class="sensitive">${{escapeHtml(issue.issue_ref)}}</h3>
+          <div class="meta sensitive">
             <span class="chip">sessions: ${{issue.sessions_count}}</span>
             <span class="chip">active: ${{issue.active_count}}</span>
             <span class="chip">archived: ${{issue.archived_count}}</span>
@@ -307,6 +429,57 @@ def render_html(initial_date: str, initial_limit: int) -> str:
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;");
+    }}
+
+    function formatDateValue(date) {{
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${{year}}-${{month}}-${{day}}`;
+    }}
+
+    function parseDateInputValue(value) {{
+      const match = /^(\\d{{4}})-(\\d{{2}})-(\\d{{2}})$/.exec(value);
+      if (!match) {{
+        return null;
+      }}
+      return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    }}
+
+    function buildQuickDays(anchorValue) {{
+      const anchorDate = parseDateInputValue(anchorValue) || parseDateInputValue("{initial_date}");
+      if (!anchorDate) {{
+        quickDaysEl.innerHTML = "";
+        return;
+      }}
+      const items = [];
+      for (let offset = 0; offset < 5; offset += 1) {{
+        const target = new Date(anchorDate);
+        target.setDate(anchorDate.getDate() - offset);
+        const value = formatDateValue(target);
+        const label = `${{String(target.getMonth() + 1).padStart(2, "0")}}/${{String(target.getDate()).padStart(2, "0")}}`;
+        const weekday = weekDays[target.getDay()];
+        items.push(`
+          <button
+            type="button"
+            class="quick-day${{value === dateInput.value && !allInput.checked ? " active" : ""}}"
+            data-date="${{value}}"
+            title="${{value}}">
+            <span class="quick-day-day">${{label}}</span>
+            <span class="quick-day-label">${{weekday}}</span>
+          </button>
+        `);
+      }}
+      quickDaysEl.innerHTML = items.join("");
+      quickDaysEl.querySelectorAll(".quick-day").forEach((button) => {{
+        button.addEventListener("click", async () => {{
+          allInput.checked = false;
+          dateInput.disabled = false;
+          dateInput.value = button.dataset.date;
+          buildQuickDays(dateInput.value);
+          await loadReport();
+        }});
+      }});
     }}
 
     function renderStats(stats, targetDate) {{
@@ -325,6 +498,50 @@ def render_html(initial_date: str, initial_limit: int) -> str:
         return;
       }}
       target.innerHTML = items.map(cardHtml).join("");
+    }}
+
+    function setActiveTab(tabName) {{
+      document.querySelectorAll(".tab").forEach((node) => {{
+        node.classList.toggle("active", node.dataset.tab === tabName);
+      }});
+      document.querySelectorAll(".panel").forEach((node) => {{
+        node.classList.toggle("active", node.id === `panel-${{tabName}}`);
+      }});
+    }}
+
+    function applyDemoState() {{
+      if (demoMask) {{
+        document.body.classList.add("demo-mask");
+      }}
+      if (!demoStep) {{
+        return;
+      }}
+
+      const steps = {{
+        "sessions-top": () => {{
+          setActiveTab("sessions");
+          window.scrollTo({{ top: 0, behavior: "auto" }});
+        }},
+        "sessions-archived": () => {{
+          setActiveTab("sessions");
+          const top = Math.max(0, archivedSessionsEl.getBoundingClientRect().top + window.scrollY - 120);
+          window.scrollTo({{ top, behavior: "auto" }});
+        }},
+        "issues-top": () => {{
+          setActiveTab("issues");
+          window.scrollTo({{ top: 0, behavior: "auto" }});
+        }},
+        "issues-mid": () => {{
+          setActiveTab("issues");
+          const top = Math.max(0, issueGroupsEl.getBoundingClientRect().top + window.scrollY + 180);
+          window.scrollTo({{ top, behavior: "auto" }});
+        }},
+      }};
+
+      const action = steps[demoStep];
+      if (action) {{
+        action();
+      }}
     }}
 
     async function loadReport() {{
@@ -349,6 +566,9 @@ def render_html(initial_date: str, initial_limit: int) -> str:
       }} else {{
         issueGroupsEl.innerHTML = payload.issue_groups.map(issueCardHtml).join("");
       }}
+      applyDemoState();
+      buildQuickDays(dateInput.value);
+      document.body.classList.add("report-ready");
     }}
 
     document.getElementById("controls").addEventListener("submit", async (event) => {{
@@ -358,22 +578,371 @@ def render_html(initial_date: str, initial_limit: int) -> str:
 
     allInput.addEventListener("change", () => {{
       dateInput.disabled = allInput.checked;
+      buildQuickDays(dateInput.value);
+    }});
+
+    dateInput.addEventListener("change", () => {{
+      buildQuickDays(dateInput.value);
     }});
 
     document.querySelectorAll(".tab").forEach((tab) => {{
       tab.addEventListener("click", () => {{
-        document.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
-        document.querySelectorAll(".panel").forEach((node) => node.classList.remove("active"));
-        tab.classList.add("active");
-        document.getElementById(`panel-${{tab.dataset.tab}}`).classList.add("active");
+        setActiveTab(tab.dataset.tab);
       }});
     }});
 
     if (!dateInput.value) {{
       dateInput.value = "{initial_date}";
     }}
+    buildQuickDays(dateInput.value);
     loadReport().catch((error) => {{
       statsEl.innerHTML = `<div class="empty">読み込みに失敗しました: ${{escapeHtml(error.message)}}</div>`;
+    }});
+  </script>
+</body>
+</html>
+"""
+
+
+def render_session_detail_html(session_id: str, file_hint: str | None) -> str:
+    session_id_json = json.dumps(session_id, ensure_ascii=False)
+    file_hint_json = json.dumps(file_hint, ensure_ascii=False)
+    return f"""<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Codex Log Analysis</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --bg: #f4f1ea;
+      --panel: #fffdf8;
+      --panel-alt: #f7efe4;
+      --ink: #1f2430;
+      --muted: #5f6778;
+      --line: #d8cfbf;
+      --accent: #a54d2d;
+      --assistant: #335c81;
+      --accent-soft: #f6d8c8;
+      --chip: #efe7da;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font-family: "Iowan Old Style", "Hiragino Mincho ProN", serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, #f9e8d8 0, transparent 28%),
+        linear-gradient(180deg, #f8f4ed 0%, var(--bg) 100%);
+    }}
+    body.demo-mask .sensitive {{
+      filter: blur(10px);
+      opacity: 0.85;
+      user-select: none;
+    }}
+    body.demo-mask .sensitive::selection {{
+      background: transparent;
+    }}
+    main {{
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 28px 20px 56px;
+    }}
+    .topbar {{
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }}
+    .back-link {{
+      color: var(--accent);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 600;
+    }}
+    .back-link:hover {{
+      text-decoration: underline;
+    }}
+    .hero {{
+      background: rgba(255, 253, 248, 0.9);
+      border: 1px solid var(--line);
+      border-radius: 24px;
+      padding: 24px;
+      box-shadow: 0 14px 40px rgba(79, 54, 31, 0.08);
+      backdrop-filter: blur(8px);
+    }}
+    h1 {{
+      margin: 0 0 8px;
+      font-size: clamp(28px, 5vw, 40px);
+      line-height: 1.08;
+      letter-spacing: 0.02em;
+    }}
+    .lede {{
+      margin: 0;
+      color: var(--muted);
+      font-size: 15px;
+    }}
+    .meta {{
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 18px;
+    }}
+    .chip {{
+      background: var(--chip);
+      color: var(--muted);
+      padding: 4px 9px;
+      border-radius: 999px;
+      font-size: 12px;
+    }}
+    .detail-strip {{
+      display: flex;
+      gap: 10px;
+      margin: 14px 0 20px;
+      align-items: stretch;
+      overflow-x: auto;
+      padding-bottom: 4px;
+    }}
+    .detail-pill {{
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+      padding: 10px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255, 253, 248, 0.92);
+      box-shadow: 0 8px 20px rgba(79, 54, 31, 0.05);
+      white-space: nowrap;
+    }}
+    .detail-pill .k {{
+      color: var(--muted);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .detail-pill .v {{
+      font-size: 14px;
+      max-width: 280px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }}
+    .section-title {{
+      margin: 14px 0 12px;
+      font-size: 22px;
+    }}
+    .conversation {{
+      display: grid;
+      gap: 14px;
+      padding: 26px 22px;
+      border-radius: 28px;
+      border: 1px solid rgba(140, 164, 117, 0.35);
+      background:
+        linear-gradient(180deg, rgba(236, 247, 220, 0.92) 0%, rgba(249, 245, 237, 0.96) 100%),
+        repeating-linear-gradient(
+          -45deg,
+          rgba(255, 255, 255, 0.22) 0,
+          rgba(255, 255, 255, 0.22) 12px,
+          rgba(233, 242, 220, 0.12) 12px,
+          rgba(233, 242, 220, 0.12) 24px
+        );
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.35);
+    }}
+    .message-row {{
+      display: flex;
+    }}
+    .message-row.user {{
+      justify-content: flex-end;
+    }}
+    .message-row.assistant {{
+      justify-content: flex-start;
+    }}
+    .bubble-wrap {{
+      display: grid;
+      gap: 6px;
+      max-width: 72%;
+    }}
+    .bubble-meta {{
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 6px;
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }}
+    .message-row.user .bubble-meta {{
+      justify-content: flex-end;
+    }}
+    .bubble-role {{
+      font-weight: 700;
+    }}
+    .bubble {{
+      position: relative;
+      padding: 14px 16px;
+      border-radius: 22px;
+      white-space: pre-wrap;
+      word-break: break-word;
+      line-height: 1.72;
+      font-size: 15px;
+      box-shadow: 0 10px 22px rgba(73, 52, 36, 0.08);
+    }}
+    .message-row.assistant .bubble {{
+      background: rgba(255, 255, 255, 0.96);
+      color: var(--ink);
+      border: 1px solid rgba(191, 198, 204, 0.65);
+      border-bottom-left-radius: 8px;
+    }}
+    .message-row.user .bubble {{
+      background: linear-gradient(180deg, #d4fb72 0%, #b8ef41 100%);
+      color: #163109;
+      border: 1px solid rgba(137, 181, 41, 0.5);
+      border-bottom-right-radius: 8px;
+    }}
+    .message-row.assistant .bubble-role {{
+      color: var(--assistant);
+    }}
+    .message-row.user .bubble-role {{
+      color: var(--accent);
+    }}
+    .timestamp {{
+      color: var(--muted);
+    }}
+    .empty {{
+      color: var(--muted);
+      border: 1px dashed var(--line);
+      border-radius: 18px;
+      padding: 20px;
+      background: rgba(255, 253, 248, 0.65);
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="topbar">
+      <a class="back-link" href="/">一覧に戻る</a>
+    </div>
+
+    <section class="hero">
+      <h1 id="title">会話詳細</h1>
+      <p class="lede">このページでは、セッション内の `user` / `assistant` メッセージ本文だけを時系列で表示します。</p>
+      <div class="meta sensitive" id="sessionMeta"></div>
+    </section>
+
+    <section class="detail-strip" id="sessionStats"></section>
+
+    <section>
+      <h2 class="section-title">会話ログ</h2>
+      <div class="conversation" id="conversation"></div>
+    </section>
+  </main>
+
+  <script>
+    const sessionId = {session_id_json};
+    const fileHint = {file_hint_json};
+    const titleEl = document.getElementById("title");
+    const sessionMetaEl = document.getElementById("sessionMeta");
+    const sessionStatsEl = document.getElementById("sessionStats");
+    const conversationEl = document.getElementById("conversation");
+    const searchParams = new URLSearchParams(window.location.search);
+    const demoMask = searchParams.get("mask") === "1";
+
+    function escapeHtml(text) {{
+      return String(text)
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;");
+    }}
+
+    function messageHtml(message) {{
+      const timestamp = message.timestamp ? escapeHtml(message.timestamp) : "-";
+      const roleLabel = message.display_role ? escapeHtml(message.display_role) : (message.role === "user" ? "user" : "assistant");
+      return `
+        <article class="message-row ${{message.role}}">
+          <div class="bubble-wrap sensitive">
+            <div class="bubble-meta">
+              <span class="bubble-role">${{roleLabel}}</span>
+              <span class="timestamp">${{timestamp}}</span>
+            </div>
+            <div class="bubble">${{escapeHtml(message.text)}}</div>
+          </div>
+        </article>`;
+    }}
+
+    function statPill(label, value) {{
+      return `
+        <article class="detail-pill sensitive" title="${{escapeHtml(value)}}">
+          <span class="k">${{escapeHtml(label)}}</span>
+          <span class="v">${{escapeHtml(value)}}</span>
+        </article>`;
+    }}
+
+    function renderSession(session, stats) {{
+      const title = session.full_title || session.title || session.session_id;
+      document.title = `${{title}} | Codex Log Analysis`;
+      titleEl.textContent = title;
+      const issues = session.issue_refs.length ? session.issue_refs.join(", ") : "-";
+      const metaChips = [
+        `<span class="chip">${{session.archived ? "archived" : "active"}}</span>`,
+        `<span class="chip">session: ${{escapeHtml(session.session_id)}}</span>`,
+        `<span class="chip">branch: ${{escapeHtml(session.branch)}}</span>`,
+        `<span class="chip">issues: ${{escapeHtml(issues)}}</span>`,
+      ];
+      if (session.is_subagent_session) {{
+        metaChips.push('<span class="chip subagent">sub agent session</span>');
+        if (session.subagent_nickname) {{
+          metaChips.push(`<span class="chip subagent">nickname: ${{escapeHtml(session.subagent_nickname)}}</span>`);
+        }}
+        if (session.subagent_role) {{
+          metaChips.push(`<span class="chip subagent">role: ${{escapeHtml(session.subagent_role)}}</span>`);
+        }}
+      }}
+      sessionMetaEl.innerHTML = metaChips.join("");
+      const statItems = [
+        statPill("messages", `${{stats.messages}}`),
+        statPill("user / assistant", `${{stats.user_messages}} / ${{stats.assistant_messages}}`),
+        statPill("cwd", session.cwd),
+        statPill("log file", session.file),
+      ];
+      if (session.is_subagent_session && session.subagent_parent_session_id) {{
+        statItems.unshift(statPill("parent session", session.subagent_parent_session_id));
+      }}
+      sessionStatsEl.innerHTML = statItems.join("");
+    }}
+
+    async function loadSessionDetail() {{
+      if (demoMask) {{
+        document.body.classList.add("demo-mask");
+      }}
+      const params = new URLSearchParams();
+      if (fileHint) {{
+        params.set("file", fileHint);
+      }}
+      if (demoMask) {{
+        params.set("mask", "1");
+      }}
+      const query = params.toString();
+      const response = await fetch(`/api/sessions/${{encodeURIComponent(sessionId)}}${{query ? `?${{query}}` : ""}}`);
+      if (!response.ok) {{
+        const text = await response.text();
+        throw new Error(text || `HTTP ${{response.status}}`);
+      }}
+      const payload = await response.json();
+      renderSession(payload.session, payload.stats);
+      if (!payload.conversation.length) {{
+        conversationEl.innerHTML = '<div class="empty">会話本文を持つメッセージはありません。</div>';
+        return;
+      }}
+      conversationEl.innerHTML = payload.conversation.map(messageHtml).join("");
+    }}
+
+    loadSessionDetail().catch((error) => {{
+      conversationEl.innerHTML = `<div class="empty">読み込みに失敗しました: ${{escapeHtml(error.message)}}</div>`;
     }});
   </script>
 </body>
@@ -394,6 +963,7 @@ def serve(
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            query = parse_qs(parsed.query)
             if parsed.path == "/":
                 target_date = initial_date.isoformat() if initial_date is not None else default_target_date().isoformat()
                 body = render_html(target_date, limit).encode("utf-8")
@@ -404,8 +974,21 @@ def serve(
                 self.wfile.write(body)
                 return
 
+            if parsed.path.startswith("/sessions/"):
+                session_id = unquote(parsed.path.removeprefix("/sessions/"))
+                if not session_id:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "missing session id")
+                    return
+                file_hint = query.get("file", [""])[0] or None
+                body = render_session_detail_html(session_id, file_hint).encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
             if parsed.path == "/api/report":
-                query = parse_qs(parsed.query)
                 all_mode = query.get("all", ["0"])[0] == "1"
                 date_value = query.get("date", [""])[0]
                 target_date = None if all_mode else parse_date(date_value or default_target_date().isoformat())
@@ -417,6 +1000,38 @@ def serve(
                     target_date=target_date,
                     limit=limit_value,
                 )
+                body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+                self.send_response(HTTPStatus.OK)
+                self.send_header("Content-Type", "application/json; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if parsed.path.startswith("/api/sessions/"):
+                session_id = unquote(parsed.path.removeprefix("/api/sessions/"))
+                if not session_id:
+                    self.send_error(HTTPStatus.BAD_REQUEST, "missing session id")
+                    return
+                file_hint = query.get("file", [""])[0] or None
+                try:
+                    payload = build_session_detail_payload(
+                        root=root,
+                        archived_root=archived_root,
+                        sqlite_path=sqlite_path,
+                        session_id=session_id,
+                        file_hint=file_hint,
+                    )
+                except FileNotFoundError as exc:
+                    self.send_error(HTTPStatus.NOT_FOUND, str(exc))
+                    return
+                except ValueError as exc:
+                    self.send_error(HTTPStatus.BAD_REQUEST, str(exc))
+                    return
+                except RuntimeError as exc:
+                    self.send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
+                    return
+
                 body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", "application/json; charset=utf-8")
