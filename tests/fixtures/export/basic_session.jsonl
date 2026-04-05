@@ -1,0 +1,9 @@
+{"timestamp":"2026-04-05T01:00:00Z","type":"session_meta","payload":{"id":"session-jsonl-001","timestamp":"2026-04-05T01:00:00Z","cwd":"/tmp/example"}}
+{"timestamp":"2026-04-05T01:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/tmp/example</cwd>\n</environment_context>"}]}}
+{"timestamp":"2026-04-05T01:00:05Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"CLIで Markdown ノートを書き出したい"}]}}
+{"timestamp":"2026-04-05T01:00:10Z","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"rg --files .\"}","call_id":"call-1"}}
+{"timestamp":"2026-04-05T01:00:11Z","type":"response_item","payload":{"type":"function_call_output","call_id":"call-1","output":"{\"output\":\"README.md\\nsrc/app.py\\n\",\"metadata\":{\"exit_code\":0}}"}}
+{"timestamp":"2026-04-05T01:00:12Z","type":"event_msg","payload":{"type":"agent_reasoning","text":"必要な入出力だけを残す方針を考えている"}}
+{"timestamp":"2026-04-05T01:00:20Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"まず最小のCLIを作り、その後に出力形式を固めます。"}],"phase":"commentary"}}
+{"timestamp":"2026-04-05T01:00:30Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Markdown export を実装し、filtered モードでは meta prompt と commentary を除外します。"}],"phase":"final_answer"}}
+

@@ -8,6 +8,7 @@ dependencies = []
 
 [project.scripts]
 codex-log-analysis = "codex_log_analysis.cli:main"
+codex-log-export = "codex_log_export.cli:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -15,4 +16,3 @@ build-backend = "hatchling.build"
 
 [tool.uv]
 package = true
-

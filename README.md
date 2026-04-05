@@ -84,3 +84,51 @@ uv run codex-log-analysis report \
 - `AGENTS.md`: この repo での実装・検証ルール
 - `.codex/napkin.md`: 再利用用の短い運用メモ
 - `src/codex_log_analysis/cli.py`: セッション集計 CLI
+
+## Markdown export
+
+Obsidian 向けの Markdown を出したいときは、別モジュール `codex_log_export` を使います。
+
+JSONL に加えて、JSON 配列または `messages` / `records` / `items` / `events` のいずれか 1 つだけを持つ JSON wrapper に対応します。未対応の JSON ルート形状は fail fast で止めます。
+
+この exporter は現在 `note` モードだけを対象にしています。ログ本体を証拠として保持する前提で、人間が読み返してインサイトを得やすい要約ノートを作る用途です。raw tool output は出さず、`Summary` / `Keywords` / `Key Phrases` / `Selected Messages` / `Tool Stats` に圧縮します。
+
+```bash
+uv run python -m codex_log_export export \
+  --input sessions_snapshot \
+  --output /tmp/codex-markdown \
+  --mode note \
+  --sqlite state_5.sqlite
+```
+
+単一ファイルを stdout で確認:
+
+```bash
+uv run python -m codex_log_export export \
+  --input tests/fixtures/export/basic_session.jsonl \
+  --output /tmp/codex-markdown \
+  --mode note \
+  --stdout
+```
+
+オプション:
+
+- `--input`: 入力ファイルまたはディレクトリ
+- `--output`: 生成先ディレクトリ
+- `--mode note`: wiki 向けの軽量ノート
+- `--overwrite`: 既存 Markdown を上書き
+- `--stdout`: 単一ノートを標準出力へ表示
+- `--sqlite`: `state_*.sqlite` から `title` / `cwd` / `branch` を補完
+
+fixture:
+
+- `tests/fixtures/export/basic_session.jsonl`
+- `tests/fixtures/export/basic_session.json`
+
+出力サンプル:
+
+- `docs/export-sample.md`
+
+今後の拡張メモ:
+
+- `docs/export-nice-to-have.md`
